@@ -7,15 +7,56 @@ set -u
 set -o pipefail
 
 export PROVIDER=${PROVIDER:-"cloudflare"}
+export WAIT_TIME=${WAIT_TIME:=30}
+export RETRY=${RETRY:=10}
+export DNS_SERVER=${DNS_SERVER:=8.8.8.8}
+export DEBUG=${DEBUG:=false}
 
 function deploy_challenge {
-    local DOMAIN="${1}" TOKEN_FILENAME="${2}" TOKEN_VALUE="${3}"
+    local DOMAIN="${1}" TOKEN_FILENAME="${2}" TOKEN_VALUE="${3}" COUNTER=0 RESULT=false
 
     echo "deploy_challenge called: ${DOMAIN}, ${TOKEN_FILENAME}, ${TOKEN_VALUE}"
 
-    lexicon $PROVIDER create ${DOMAIN} TXT --name="_acme-challenge.${DOMAIN}." --content="${TOKEN_VALUE}"
+    if $DEBUG;
+    then
+        lexicon $PROVIDER create ${DOMAIN} TXT --name="_acme-challenge.${DOMAIN}." --content="${TOKEN_VALUE}"
+    else
+        lexicon $PROVIDER create ${DOMAIN} TXT --name="_acme-challenge.${DOMAIN}." --content="${TOKEN_VALUE}" &> /dev/null
+    fi
 
-    sleep 30
+    echo -n "Waiting for record update : "
+
+    while [ $COUNTER -lt $RETRY ];
+    do
+        check=$(dig +short TXT _acme-challenge.${DOMAIN} @${DNS_SERVER} | sed 's/"//g')
+
+        if $DEBUG;
+        then
+            echo "_acme-challenge.${DOMAIN} -> $COUNTER/$RETRY -> $TOKEN_VALUE = $check"
+        else
+            echo -n "."
+        fi
+        COUNTER=$((COUNTER+1))
+
+        if [ "$check" == "$TOKEN_VALUE" ];
+        then
+            RESULT=true
+            COUNTER=$RETRY
+        fi
+
+        sleep $WAIT_TIME
+    done
+
+    echo ""
+
+    if $RESULT;
+    then
+        echo "Check success!"
+    else
+        echo "Check failed!"
+    fi
+
+
 
     # This hook is called once for every domain that needs to be
     # validated, including any alternative names you may have listed.
@@ -40,7 +81,12 @@ function clean_challenge {
 
     echo "clean_challenge called: ${DOMAIN}, ${TOKEN_FILENAME}, ${TOKEN_VALUE}"
 
-    lexicon $PROVIDER delete ${DOMAIN} TXT --name="_acme-challenge.${DOMAIN}." --content="${TOKEN_VALUE}"
+    if $DEBUG;
+    then
+        lexicon $PROVIDER delete ${DOMAIN} TXT --name="_acme-challenge.${DOMAIN}." --content="${TOKEN_VALUE}"
+    else
+        lexicon $PROVIDER delete ${DOMAIN} TXT --name="_acme-challenge.${DOMAIN}." --content="${TOKEN_VALUE}" &> /dev/null
+    fi
 
     # This hook is called after attempting to validate each domain,
     # whether or not validation was successful. Here you can delete
